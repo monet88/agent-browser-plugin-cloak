@@ -16,20 +16,23 @@ npx cloakbrowser install
 
 ## Install
 
-Use the GitHub source now:
+Install directly from GitHub (works before the npm registry release):
 
 ```bash
-agent-browser plugin add monet88/agent-browser-plugin-cloak --global
+npm install -g github:monet88/agent-browser-plugin-cloak
+agent-browser-plugin-cloak-install
 agent-browser plugin show cloak
 ```
 
-When the npm package is available, you can use `agent-browser plugin add agent-browser-plugin-cloak --global` instead.
+The installer writes the provider to `~/.agent-browser/config.json` using the absolute Node executable and plugin CLI path. This also avoids the Windows `npx.cmd` spawn issue in `agent-browser 0.33.2`.
 
 Then use it as the browser provider:
 
 ```bash
 agent-browser --provider cloak open https://example.com
 ```
+
+When the npm registry package is available, replace the first command with `npm install -g agent-browser-plugin-cloak`.
 
 ## Binary modes
 

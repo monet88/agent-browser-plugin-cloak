@@ -34,7 +34,8 @@
     "cloakbrowser": "^0.5.7"
   },
   "bin": {
-    "agent-browser-plugin-cloak": "dist/cli.js"
+    "agent-browser-plugin-cloak": "dist/cli.js",
+    "agent-browser-plugin-cloak-install": "dist/install.js"
   },
   "files": [
     "dist",
