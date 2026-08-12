@@ -1,0 +1,54 @@
+{
+  "name": "agent-browser-plugin-cloak",
+  "version": "0.1.0",
+  "description": "Thin browser.provider plugin for agent-browser connecting to CloakBrowser",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "agent-browser": {
+    "capabilities": [
+      "browser.provider"
+    ],
+    "name": "cloak"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx test/plugin.test.ts",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "agent-browser-plugin",
+    "browser-provider",
+    "cloak",
+    "cloakserve"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "cloakbrowser": "^0.5.7"
+  },
+  "bin": {
+    "agent-browser-plugin-cloak": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monet88/agent-browser-plugin-cloak.git"
+  },
+  "homepage": "https://github.com/monet88/agent-browser-plugin-cloak#readme",
+  "bugs": {
+    "url": "https://github.com/monet88/agent-browser-plugin-cloak/issues"
+  }
+}
