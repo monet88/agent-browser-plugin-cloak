@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-plugin-cloak",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Thin browser.provider plugin for agent-browser connecting to CloakBrowser",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,15 +13,15 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "tsx test/plugin.test.ts",
+    "test": "tsx test/plugin.test.ts && tsx test/windows-headed.test.ts",
+    "test:headed:windows": "tsx test/windows-headed.test.ts",
     "prepack": "npm run build",
     "prepublishOnly": "npm test"
   },
   "keywords": [
     "agent-browser-plugin",
     "browser-provider",
-    "cloak",
-    "cloakserve"
+    "cloak"
   ],
   "author": "Antigravity",
   "license": "MIT",

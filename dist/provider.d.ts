@@ -6,8 +6,8 @@
  *
  * Key design: Chrome must survive the plugin process's exit because
  * agent-browser spawns the plugin, reads the CDP URL, then the plugin exits.
- * On Windows, we use `cmd.exe /c start` to create a truly independent process
- * that is not part of the plugin's process tree.
+ * On Windows, Chrome is launched through PowerShell Start-Process. Explicit
+ * headed launches also create a breakaway delayed-focus watcher via cmd/start.
  */
 import { CloakSession, CloakSessionManager } from './sessions.js';
 export interface CloakProviderOptions {
@@ -29,6 +29,7 @@ export interface CloakProviderOptions {
     userDataDir?: string;
     headless?: boolean;
 }
+export declare function resolveBundledCloakBinary(cacheRoot: string, major?: string): string | undefined;
 /**
  * Resolve the CloakBrowser binary without accidentally upgrading a keyless/free
  * installation to a licensed/latest build.

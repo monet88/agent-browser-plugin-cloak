@@ -6,13 +6,13 @@
  *
  * Key design: Chrome must survive the plugin process's exit because
  * agent-browser spawns the plugin, reads the CDP URL, then the plugin exits.
- * On Windows, we use `cmd.exe /c start` to create a truly independent process
- * that is not part of the plugin's process tree.
+ * On Windows, Chrome is launched through PowerShell Start-Process. Explicit
+ * headed launches also create a breakaway delayed-focus watcher via cmd/start.
  */
 
 import * as http from 'node:http';
 import * as net from 'node:net';
-import { spawn, execSync, ChildProcess } from 'node:child_process';
+import { spawn, execSync, execFileSync, ChildProcess } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -54,6 +54,28 @@ async function findFreePort(): Promise<number> {
   });
 }
 
+const DEFAULT_BUNDLED_MAJOR = '146';
+
+export function resolveBundledCloakBinary(
+  cacheRoot: string,
+  major: string = process.env.CLOAKBROWSER_BUNDLED_MAJOR || DEFAULT_BUNDLED_MAJOR,
+): string | undefined {
+  if (!fs.existsSync(cacheRoot)) return undefined;
+
+  const candidates = fs.readdirSync(cacheRoot)
+    .filter((entry) => entry.startsWith(`chromium-${major}.`))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
+
+  for (const candidate of candidates) {
+    const binaryPath = process.platform === 'darwin'
+      ? path.join(cacheRoot, candidate, 'Chromium.app', 'Contents', 'MacOS', 'Chromium')
+      : path.join(cacheRoot, candidate, process.platform === 'win32' ? 'chrome.exe' : 'chrome');
+    if (fs.existsSync(binaryPath)) return binaryPath;
+  }
+
+  return undefined;
+}
+
 /**
  * Resolve the CloakBrowser binary without accidentally upgrading a keyless/free
  * installation to a licensed/latest build.
@@ -84,16 +106,14 @@ export async function resolveCloakBrowser(options: CloakProviderOptions): Promis
   }
 
   if (mode === 'bundled') {
-    const info = sdk.binaryInfo();
-    const version = info.bundledVersion as string;
     const cacheRoot = process.env.CLOAKBROWSER_CACHE_DIR || path.join(os.homedir(), '.cloakbrowser');
-    const binaryPath = process.platform === 'darwin'
-      ? path.join(cacheRoot, `chromium-${version}`, 'Chromium.app', 'Contents', 'MacOS', 'Chromium')
-      : path.join(cacheRoot, `chromium-${version}`, process.platform === 'win32' ? 'chrome.exe' : 'chrome');
-    if (!fs.existsSync(binaryPath)) {
+    const major = process.env.CLOAKBROWSER_BUNDLED_MAJOR || DEFAULT_BUNDLED_MAJOR;
+    const binaryPath = resolveBundledCloakBinary(cacheRoot, major);
+
+    if (!binaryPath) {
       throw new Error(
-        `Bundled CloakBrowser ${version} is not installed at ${binaryPath}. ` +
-        `Run "npx cloakbrowser install" without a license override, or use binaryMode=latest/explicit.`
+        `Bundled CloakBrowser chromium-${major}.* is not installed in ${cacheRoot}. ` +
+        `Run "npx cloakbrowser install" or set CLOAKBROWSER_BUNDLED_MAJOR/CLOAKBROWSER_PATH.`
       );
     }
     return { binaryPath, stealthArgs: sdk.getDefaultStealthArgs(), mode };
@@ -114,20 +134,104 @@ export async function resolveCloakBrowser(options: CloakProviderOptions): Promis
   };
 }
 
+const WINDOWS_FOCUS_CSHARP = `
+using System;
+using System.Runtime.InteropServices;
+public static class WinFocus {
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+  [DllImport("user32.dll")] static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr hWnd);
+  public static bool Force(IntPtr target) {
+    uint ignored;
+    var foreground = GetForegroundWindow();
+    var foregroundThread = GetWindowThreadProcessId(foreground, out ignored);
+    var targetThread = GetWindowThreadProcessId(target, out ignored);
+    var currentThread = GetCurrentThreadId();
+    var attachedForeground = foregroundThread != 0 && AttachThreadInput(currentThread, foregroundThread, true);
+    var attachedTarget = targetThread != 0 && AttachThreadInput(currentThread, targetThread, true);
+    ShowWindowAsync(target, 9);
+    BringWindowToTop(target);
+    var result = SetForegroundWindow(target);
+    SetFocus(target);
+    if (attachedTarget) AttachThreadInput(currentThread, targetThread, false);
+    if (attachedForeground) AttachThreadInput(currentThread, foregroundThread, false);
+    return result;
+  }
+}`;
+
+function psSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function buildWindowsLaunchScript(binaryPath: string, args: string[], focusWindow: boolean): string {
+  const launch = `$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath ${psSingleQuote(binaryPath)} -ArgumentList @(${args.map(psSingleQuote).join(',')}) -WindowStyle Normal -PassThru`;
+  if (!focusWindow) return launch;
+
+  const focusType = psSingleQuote(WINDOWS_FOCUS_CSHARP);
+  const watcherTemplate = `$ErrorActionPreference = 'SilentlyContinue'; $targetPid = __PID__; Add-Type -TypeDefinition ${focusType}; foreach ($delay in @(500,1500,6000)) { Start-Sleep -Milliseconds $delay; $target = Get-Process -Id $targetPid -ErrorAction SilentlyContinue; if (-not $target) { exit 0 }; $target.Refresh(); if ($target.MainWindowHandle -ne 0) { [void][WinFocus]::Force([IntPtr]$target.MainWindowHandle) } }`;
+  const watcherLiteral = psSingleQuote(watcherTemplate);
+
+  return `${launch}; try { for ($i = 0; $i -lt 50; $i++) { Start-Sleep -Milliseconds 100; $p.Refresh(); if ($p.MainWindowHandle -ne 0) { break } }; if ($p.MainWindowHandle -ne 0) { Add-Type -TypeDefinition ${focusType}; [void][WinFocus]::Force([IntPtr]$p.MainWindowHandle) }; $watcher = ${watcherLiteral}.Replace('__PID__', [string]$p.Id); $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($watcher)); cmd.exe /d /s /c "start /min powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encoded" | Out-Null } catch { }`;
+}
+
 /**
- * Spawn CloakBrowser as a fully independent process.
+ * Spawn CloakBrowser as a fully independent process across Windows, macOS, and Linux.
  *
- * Uses Node's spawn with detached:true + unref() to orphan the Chrome process.
- * CloakBrowser on Windows does NOT support headless (exits immediately),
- * so we always run headed. The window can be minimized via --window-position.
- *
- * On Linux/macOS: same approach, with optional headless.
+ * Windows: Uses PowerShell `Start-Process` for GUI launch. Explicit `--headed`
+ * requests additionally wait for a real HWND and hand foreground ownership to it.
+ * macOS: Uses `open -n -a` for `.app` bundles to bring window frontmost on Aqua GUI.
+ * Linux: Inherits or defaults `DISPLAY`/`WAYLAND_DISPLAY` to ensure X11/Wayland window rendering.
  */
-function spawnIndependentChrome(binaryPath: string, args: string[]): void {
+function spawnIndependentChrome(binaryPath: string, args: string[], focusWindow: boolean = false): void {
+  if (process.platform === 'win32') {
+    try {
+      const psScript = buildWindowsLaunchScript(binaryPath, args, focusWindow);
+      const psArgs = [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        psScript
+      ];
+      if (process.env.CLOAK_PLUGIN_LOG) {
+        fs.appendFileSync(process.env.CLOAK_PLUGIN_LOG, `[PS CALL] powershell ${psArgs.join(' ')}\n`);
+      }
+      execFileSync('powershell.exe', psArgs, { windowsHide: false });
+      return;
+    } catch (err) {
+      if (process.env.CLOAK_PLUGIN_LOG) {
+        fs.appendFileSync(process.env.CLOAK_PLUGIN_LOG, `[PS ERR] ${err instanceof Error ? err.message : String(err)}\n`);
+      }
+    }
+  } else if (process.platform === 'darwin') {
+    if (binaryPath.includes('.app/Contents/MacOS/')) {
+      const appPath = binaryPath.substring(0, binaryPath.indexOf('.app') + 4);
+      try {
+        const openArgs = ['-n', '-a', appPath, '--args', ...args];
+        const child = spawn('open', openArgs, { detached: true, stdio: ['ignore', 'ignore', 'ignore'] });
+        child.unref();
+        return;
+      } catch {
+        // Fallback to direct binary spawn
+      }
+    }
+  }
+
+  // Cross-platform fallback (Linux / macOS direct binary / Windows fallback)
+  const env: Record<string, string | undefined> = { ...process.env };
+  if (process.platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY) {
+    env.DISPLAY = ':0';
+  }
+
   const child = spawn(binaryPath, args, {
     detached: true,
     stdio: ['ignore', 'ignore', 'ignore'],
-    windowsHide: false, // must be false for headed CloakBrowser
+    windowsHide: false,
+    env,
   });
   child.unref();
 }
@@ -262,8 +366,9 @@ export class CloakBrowserProvider {
       args.push(`--fingerprint=${seed}`);
     }
 
-    // CloakBrowser on Windows does NOT support headless mode — Chrome exits
-    // immediately. Always run headed. On Linux/macOS, headless works fine.
+    if (process.platform === 'win32' || options.headless === false) {
+      args.push('--start-maximized', '--window-position=100,100', '--window-size=1280,800');
+    }
     if (process.platform !== 'win32' && options.headless !== false) {
       args.push('--headless=new');
     }
@@ -280,8 +385,9 @@ export class CloakBrowserProvider {
       args.push(...options.extraArgs);
     }
 
-    // Launch CloakBrowser as an independent process
-    spawnIndependentChrome(binaryPath, args);
+    // Launch CloakBrowser as an independent process. Only explicit headed mode
+    // should steal foreground from an IDE/background runner.
+    spawnIndependentChrome(binaryPath, args, options.headless === false);
 
     // Wait for CDP to become ready
     const timeout = options.startTimeoutMs || 15000;

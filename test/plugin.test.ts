@@ -1,6 +1,7 @@
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import {
   CloakBrowserProvider,
@@ -64,23 +65,25 @@ async function runTests() {
   });
 
   // 3. Binary resolution test
-  await testCase('bundled mode resolves the wrapper bundled/free CloakBrowser build', async () => {
-    const { resolveCloakBrowser } = await import('../src/provider.js');
-    const previousMode = process.env.CLOAKBROWSER_BINARY_MODE;
-    const previousPath = process.env.CLOAKBROWSER_PATH;
-    const previousBinaryPath = process.env.CLOAKBROWSER_BINARY_PATH;
-    delete process.env.CLOAKBROWSER_BINARY_MODE;
-    delete process.env.CLOAKBROWSER_PATH;
-    delete process.env.CLOAKBROWSER_BINARY_PATH;
+  await testCase('bundled resolver scans chromium-146.* and selects the newest installed patch', async () => {
+    const { resolveBundledCloakBinary } = await import('../src/provider.js');
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cloak-resolver-'));
     try {
-      const result = await resolveCloakBrowser({ binaryMode: 'bundled' });
-      assert(result.mode === 'bundled', 'Resolution mode must be bundled');
-      assert(result.binaryPath.includes('chromium-146.0.7680.177.5'), 'Bundled Windows build should resolve Chromium 146');
-      assert(fs.existsSync(result.binaryPath), 'Bundled binary path must exist');
+      const executableName = process.platform === 'win32' ? 'chrome.exe' : 'chrome';
+      for (const dir of ['chromium-146.0.7680.177.4', 'chromium-146.0.7680.177.5', 'chromium-150.0.7871.114.3-pro']) {
+        const executablePath = process.platform === 'darwin'
+          ? path.join(cacheRoot, dir, 'Chromium.app', 'Contents', 'MacOS', 'Chromium')
+          : path.join(cacheRoot, dir, executableName);
+        fs.mkdirSync(path.dirname(executablePath), { recursive: true });
+        fs.writeFileSync(executablePath, 'fixture');
+      }
+
+      const resolved = resolveBundledCloakBinary(cacheRoot, '146');
+      assert(Boolean(resolved), 'Resolver must find an installed chromium-146.* binary');
+      assert(resolved!.includes('chromium-146.0.7680.177.5'), 'Resolver must select the newest 146 patch');
+      assert(!resolved!.includes('chromium-150'), 'Resolver must not fall through to another major');
     } finally {
-      if (previousMode === undefined) delete process.env.CLOAKBROWSER_BINARY_MODE; else process.env.CLOAKBROWSER_BINARY_MODE = previousMode;
-      if (previousPath === undefined) delete process.env.CLOAKBROWSER_PATH; else process.env.CLOAKBROWSER_PATH = previousPath;
-      if (previousBinaryPath === undefined) delete process.env.CLOAKBROWSER_BINARY_PATH; else process.env.CLOAKBROWSER_BINARY_PATH = previousBinaryPath;
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
     }
   });
 
@@ -135,7 +138,7 @@ async function runTests() {
 
   // 5. Mock external CDP server test for lifecycle (attach, connect, cleanup, multi-session)
   await testCase('CloakBrowserProvider attaches to an existing CDP server and manages session lifecycle', async () => {
-    // Spin up mock cloakserve HTTP server on port 9876
+    // Spin up a mock external CDP endpoint on port 9876
     const mockPort = 9876;
     const server = http.createServer((req, res) => {
       if (req.url?.startsWith('/json/version')) {

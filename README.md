@@ -32,13 +32,21 @@ Then use it as the browser provider:
 agent-browser --provider cloak open https://example.com
 ```
 
+For a visible foreground window from an IDE/background agent on Windows, request headed mode explicitly:
+
+```bash
+agent-browser --provider cloak --session main-dev --headed open https://google.com
+```
+
+Explicit `--headed` launches use a delayed foreground handoff so the CloakBrowser window is brought back in front after the calling IDE/terminal finishes the open command. Non-headed launches do not intentionally steal foreground focus.
+
 When the npm registry package is available, replace the first command with `npm install -g agent-browser-plugin-cloak`.
 
 ## Binary modes
 
 The provider supports three binary-selection modes:
 
-- `bundled` (default): use the wrapper-bundled/keyless CloakBrowser build from `~/.cloakbrowser`.
+- `bundled` (default): scan `~/.cloakbrowser/chromium-146.*` and select the newest installed 146 patch. The patch directory is never pinned. Override the major with `CLOAKBROWSER_BUNDLED_MAJOR` when required.
 - `latest`: let the CloakBrowser SDK resolve the latest build for the current login/license state.
 - `explicit`: use `executablePath`, `CLOAKBROWSER_PATH`, or `CLOAKBROWSER_BINARY_PATH` exactly.
 
@@ -51,6 +59,7 @@ CLOAKBROWSER_BINARY_MODE=bundled|latest|explicit
 CLOAKBROWSER_PATH=C:\path\to\chrome.exe
 CLOAKBROWSER_BINARY_PATH=C:\path\to\chrome.exe
 CLOAKBROWSER_CACHE_DIR=C:\custom\cache
+CLOAKBROWSER_BUNDLED_MAJOR=146
 CLOAKBROWSER_HOST=127.0.0.1
 CLOAKBROWSER_PORT=0
 CLOAKBROWSER_START_TIMEOUT=15000
