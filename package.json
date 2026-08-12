@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-plugin-cloak",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Thin browser.provider plugin for agent-browser connecting to CloakBrowser",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
